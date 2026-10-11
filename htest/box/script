@@ -1,0 +1,11 @@
+reject BAD
+expect noc box
+expect self ok 00000000
+expect up ok 00000000
+expect flood ok 00000000
+expect kept
+expect drop ok 00000000
+expect irq ok 00000000
+expect ipi ok 00000000
+expect again ok 00000000
+expect done

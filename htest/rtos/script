@@ -1,0 +1,15 @@
+reject BAD
+reject assert
+expect to2610 boot
+expect sum ok, jump
+expect FreeRTOS on to2610-noc
+expect up 4
+send id\n
+expect noc 2x2, 4 cores
+send sum 400\n
+expect sum 21413400
+expect parts 4
+send ps\n
+expect ticks ok 3
+send bye\n
+expect rtos done

@@ -1,0 +1,14 @@
+reject BAD
+expect noc atomic
+expect up ok 00000000
+expect plain
+expect lost ok 00000000
+expect amoadd ok 00000000
+expect waits
+expect lock ok 00000000
+expect retries
+expect lrsc ok 00000000
+expect reserve ok 00000000
+expect private ok 00000000
+expect timer ok 00000000
+expect done
