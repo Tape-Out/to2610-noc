@@ -1,0 +1,4 @@
+reject BAD
+expect noc uart
+expect uart ok 0000000e
+expect done

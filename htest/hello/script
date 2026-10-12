@@ -1,5 +1,5 @@
 expect noc hello
-expect id 4e4f4334 hart 00000000 run 00000001
+expect id 4e4f4334 hart 00000000 run 00000001 mem 01800000
 expect sdram ok 00000000
 expect edge 00000101
 expect done

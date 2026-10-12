@@ -54,3 +54,9 @@ trap:
     lw t6, 60(sp)
     addi sp, sp, 64
     mret
+
+# 等中断
+.global wait_irq
+wait_irq:
+    wfi
+    ret

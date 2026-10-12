@@ -17,7 +17,6 @@
 #define configUSE_TICK_HOOK 0
 #define configMAX_PRIORITIES 4
 #define configMINIMAL_STACK_SIZE 256
-#define configTOTAL_HEAP_SIZE (32 * 1024)
 #define configMAX_TASK_NAME_LEN 8
 #define configTICK_TYPE_WIDTH_IN_BITS TICK_TYPE_WIDTH_32_BITS
 #define configIDLE_SHOULD_YIELD 1

@@ -27,6 +27,7 @@ enum { HELLO = 1, SEQ, REPORT, FLOOD, BURST, TALLY, ARM, POKE, ECHO };
 #define PER 20 /* 全对全时每个核给别的每个核发几个 */
 
 void arm_irq(void);
+void wait_irq(void);
 
 static void putch(char c) {
   while (!(LSR & 0x60)) {}
@@ -124,7 +125,8 @@ static void worker(uint32_t me) {
   struct flood f;
   uint32_t from, v;
   zero(&f);
-  must(0, MSG(HELLO, me));
+  /* 报到时带上内存大小寄存器读到的兆数：各结点读到的是自己私有段的大小 */
+  must(0, MSG(HELLO, me | REG(0x10000018) >> 20 << 8));
   for (;;) {
     v = wait(&from);
     switch (KIND(v)) {
@@ -148,7 +150,7 @@ static void worker(uint32_t me) {
       case ARM:
         IE = 1;
         arm_irq();
-        for (;;) __asm__ volatile("wfi");
+        for (;;) wait_irq();
     }
   }
 }
@@ -191,7 +193,7 @@ static void master(void) {
   up = 0;
   for (int i = 0; i < 3; i++) {
     v = wait(&from);
-    bad += KIND(v) != HELLO || BODY(v) != from;
+    bad += KIND(v) != HELLO || BODY(v) != (from | (from == 1 ? 24 : 4) << 8);
     up |= 1u << from;
   }
   bad += up != 0xe;
@@ -246,7 +248,7 @@ static void master(void) {
   bad = RUN != 0x7 || (STAT & RX);
   RUN = 0xf;
   v = wait(&from);
-  bad += from != 3 || v != MSG(HELLO, 3);
+  bad += from != 3 || v != MSG(HELLO, 3 | 4 << 8);
   verdict("again", bad);
 
   say("done\n");

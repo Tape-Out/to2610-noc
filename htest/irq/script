@@ -1,0 +1,7 @@
+reject BAD
+expect noc irq
+expect n0 ok 00000000
+expect n1 ok 00000000
+expect n2 ok 00000000
+expect n3 ok 00000000
+expect done

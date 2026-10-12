@@ -1,0 +1,16 @@
+reject Kernel panic
+reject Oops
+send \n
+expect ~ #
+send devmem 0x90000000 32 0x12345678; echo wrote=$((1+1))\n
+expect wrote=2
+send devmem 0x40040100 32 2; devmem 0x40040104 32 0x33330000; echo asked=$((1+2))\n
+expect asked=3
+send until [ $(($(devmem 0x40040110) & 1)) = 1 ]; do :; done; echo from=$(devmem 0x40040108) got=$(devmem 0x4004010C)\n
+expect from=0x00000002 got=0x33330001
+send devmem 0x40040100 32 1; devmem 0x40040104 32 0x22220001; echo told=$((1+3))\n
+expect told=4
+send until [ $(($(devmem 0x40040110) & 1)) = 1 ]; do :; done; echo from=$(devmem 0x40040108) got=$(devmem 0x4004010C)\n
+expect from=0x00000001 got=0x44440001
+send devmem 0x90000004\n
+expect 0x87654321

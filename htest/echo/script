@@ -1,0 +1,6 @@
+reject BAD
+expect to2610 boot, node 0
+expect sum ok, jump
+expect noc echo
+expect echo ok 00000000
+expect done

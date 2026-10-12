@@ -96,7 +96,8 @@ static void spinner(void *arg) {
 static void worker(void *arg) {
   (void)arg;
   uint32_t from, v;
-  post(0, MSG(HELLO, me));
+  /* 报到时带上堆有几兆：堆是各段之后到段顶的那一截，各结点的段不一样大 */
+  post(0, MSG(HELLO, me | (xPortGetFreeHeapSize() >> 20) << 8));
   for (;;) {
     v = wait(&from);
     if (KIND(v) == JOB) post(from, MSG(RESULT, squares(BODY(v) >> 14, BODY(v) & 0x3fff)));
@@ -154,7 +155,8 @@ static void shell(void *arg) {
   RUN = 0xf;
   for (int i = 0; i < 3; i++) {
     v = wait(&from);
-    up += KIND(v) == HELLO && BODY(v) == from;
+    /* KianV 的私有段 24 MiB、Hazard3 的 4 MiB，镜像与栈占掉不到一兆；PicoRV32 那个结点没有堆 */
+    up += KIND(v) == HELLO && BODY(v) == (from | (from == 1 ? 23 : from == 2 ? 3 : 0) << 8);
   }
   say("up ");
   dec(up);
@@ -184,9 +186,17 @@ static void shell(void *arg) {
   }
 }
 
-int main(uint32_t hart) {
-  me = hart;
-  if (!me) say("FreeRTOS on to2610-noc\n");
+int main(void) {
+  me = REG(CTL + 0x04);
+  /* 各段与启动用的栈之后，到这个结点私有段的段顶，都交给 FreeRTOS 的堆：段顶从内存大小寄存器读，各结点不一样 */
+  extern uint8_t _stack[];
+  HeapRegion_t heap[] = {{_stack, 0x80000000u + REG(0x10000018) - (uintptr_t)_stack}, {NULL, 0}};
+  vPortDefineHeapRegions(heap);
+  if (!me) {
+    say("FreeRTOS on to2610-noc\nheap ");
+    dec(xPortGetFreeHeapSize() >> 20);
+    say(" MiB\n");
+  }
   xTaskCreate(me ? worker : shell, "main", 512, NULL, 2, NULL);
   xTaskCreate(spinner, "spin", 256, NULL, 1, NULL);
   vTaskStartScheduler();

@@ -15,9 +15,9 @@
 #define RXDATA REG(CTL + 0x10c)
 #define STAT REG(CTL + 0x110)
 
-/* CLINT 照标准的排法：mtimecmp 每核 8 字节一格，mtime 共用 */
-#define MTIMECMP(h) REG(0x02004000 + 8 * (h))
-#define MTIMECMPH(h) REG(0x02004004 + 8 * (h))
+/* 每个核一份 CLINT，同一个地址各看各的：谁读写都是自己的那一份 */
+#define MTIMECMP(h) REG(0x02004000)
+#define MTIMECMPH(h) REG(0x02004004)
 #define MTIME REG(0x0200bff8)
 
 enum { RX = 1, ROOM = 2 };
@@ -31,7 +31,7 @@ enum { HELLO = 1, GO, DONE, WRITE, MINE, TIMER };
 #define S ((volatile uint32_t *)0x90000100)
 enum { PLAIN, AMO, LOCK, LOCKED, LRSC, HELD, OTHER };
 /* 私有段里的一个字：地址四个核相同，落点各是各的 */
-#define P REG(0x80200000)
+#define P REG(0x80100000)
 
 void arm_timer(void);
 /* 预留 p，空转 spins 圈（不碰存储），再条件写 v。写成回 0 */

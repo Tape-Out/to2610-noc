@@ -1,0 +1,12 @@
+reject Kernel panic
+reject Oops
+expect to2610 boot, node 0
+expect sum ok, jump
+expect OpenSBI
+expect Linux version
+expect to2610-kvc up
+expect ~ #
+send devmem 0x40040004\n
+expect 0x00000000
+send head -n 1 /proc/meminfo\n
+expect MemTotal

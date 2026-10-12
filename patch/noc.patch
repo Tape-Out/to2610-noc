@@ -1,20 +1,34 @@
 --- a/src/soc.v
 +++ b/src/soc.v
-@@ -105,6 +105,13 @@
+@@ -32,6 +32,8 @@
+ `endif
+     output wire uart_tx,
+     input wire uart_rx,
++    output wire [3:1] uart_txn,
++    input wire [3:1] uart_rxn,
+ 
+     output wire flash_sclk,
+     output wire flash_csn,
+@@ -105,6 +107,18 @@
    wire [29:0] word_aligned_addr = cpu_mem_addr[31:2];
  
    wire is_instruction, icache_flush;
-+  wire [  3:0] t_valid, t_instr, t_excl, t_ready, t_fault, t_go, t_run, t_irq, t_ipi, t_soft, t_timer;
++  wire [  3:0] t_valid, t_instr, t_excl, t_lock, t_ready, t_fault, t_go, t_run, t_irq, t_ipi, t_soft, t_timer;
 +  wire [ 15:0] t_wstrb;
 +  wire [127:0] t_addr, t_wdata;
 +  wire         t_exokay;
 +  wire [  1:0] noc_owner;
 +  wire         noc_ready;
 +  wire [ 31:0] noc_rdata;
++  // 各结点私有的那段 SDRAM 与共享的那一段各多大：两份 Linux 各 24 MiB，另两个结点各 4 MiB，共享 8 MiB，合起来是片外那 64 MiB
++  localparam [31:0] NOC_PRIV0 = 32'h0180_0000, NOC_PRIV1 = 32'h0180_0000, NOC_PRIV2 = 32'h0040_0000,
++                    NOC_PRIV3 = 32'h0040_0000, NOC_SHARE = 32'h0080_0000;
++  wire [ 31:0] noc_priv = noc_owner == 2'd0 ? NOC_PRIV0 : noc_owner == 2'd1 ? NOC_PRIV1 :
++                          noc_owner == 2'd2 ? NOC_PRIV2 : NOC_PRIV3;
    wire [5:0] ctrl_state;
  
    wire       is_reboot_addr = (cpu_mem_addr == `REBOOT_ADDR);
-@@ -119,6 +126,7 @@
+@@ -119,6 +133,7 @@
  
    wire is_sdram = (cpu_mem_addr >= `SDRAM_MEM_ADDR_START && cpu_mem_addr < `SDRAM_MEM_ADDR_END);
    wire is_flash = (cpu_mem_addr >= `SPI_NOR_MEM_ADDR_START && cpu_mem_addr < `SPI_NOR_MEM_ADDR_END);
@@ -22,7 +36,86 @@
    wire hit_spi0 = (cpu_mem_addr == `KIANV_SPI_CTRL0 || cpu_mem_addr == `KIANV_SPI_DATA0);
    wire hit_spi1 = (cpu_mem_addr == `KIANV_SPI_CTRL1 || cpu_mem_addr == `KIANV_SPI_DATA1);
    wire hit_gpio = (cpu_mem_addr == `KIANV_GPIO_DIR   ||
-@@ -400,22 +408,39 @@
+@@ -159,7 +174,7 @@
+       .clk   (clk),
+       .resetn(resetn_sdram),
+ 
+-      .addr     (cache_addr_o[24:0]),
++      .addr     (cache_addr_o[25:0]),
+       .din      (cache_din_o),
+       .wmask    (cache_wmask_o),
+       .valid    (cache_valid_o),
+@@ -360,29 +375,46 @@
+   wire        uart_tx_rdy;
+   wire        uart_lsr_rdy;
+ 
+-  uart_if #(
+-      .LSR_ADDR(`UART_LSR_ADDR0),
+-      .TX_ADDR (`UART_TX_ADDR0),
+-      .RX_ADDR (`UART_RX_ADDR0),
+-      .HAS_TEMT(1'b1),
+-      .HAS_THRE(1'b1)
+-  ) uart_if_I (
+-      .clk        (clk),
+-      .resetn     (resetn_soc),
+-      .bus_valid_i(cpu_mem_valid),
+-      .bus_addr_i (cpu_mem_addr),
+-      .bus_wstrb_i(cpu_mem_wstrb),
+-      .bus_wdata_i(cpu_mem_wdata),
+-      .bus_rdata_o(uart_if_rdata),
+-      .bus_ready_o(uart_if_ready),
+-      .div_i      (div_reg_bus0[15:0]),
+-      .uart_tx    (uart_tx),
+-      .uart_rx    (uart_rx),
+-      .rx_data_o  (uart_rx_data_obs),
+-      .tx_busy_o  (uart_tx_busy_obs),
+-      .tx_ready_o (uart_tx_rdy),
+-      .lsr_ready_o(uart_lsr_rdy)
+-  );
++  wire [  3:0] u_ready, u_busy, u_txrdy, u_lsrrdy, u_irq, u_tx;
++  wire [127:0] u_rdata, u_rx;
++  wire [  3:0] u_rxpin = {uart_rxn, uart_rx};
++  genvar ui;
++  generate
++    for (ui = 0; ui < 4; ui = ui + 1) begin : g_uart
++      uart_if #(
++          .LSR_ADDR(`UART_LSR_ADDR0),
++          .TX_ADDR (`UART_TX_ADDR0),
++          .RX_ADDR (`UART_RX_ADDR0),
++          .HAS_TEMT(1'b1),
++          .HAS_THRE(1'b1)
++      ) uart_if_I (
++          .clk        (clk),
++          .resetn     (resetn_soc),
++          .bus_valid_i(cpu_mem_valid && noc_owner == ui),
++          .bus_addr_i (cpu_mem_addr),
++          .bus_wstrb_i(cpu_mem_wstrb),
++          .bus_wdata_i(cpu_mem_wdata),
++          .bus_rdata_o(u_rdata[ui*32+:32]),
++          .bus_ready_o(u_ready[ui]),
++          .div_i      (div_reg_bus0[15:0]),
++          .uart_tx    (u_tx[ui]),
++          .uart_rx    (u_rxpin[ui]),
++          .rx_data_o  (u_rx[ui*32+:32]),
++          .tx_busy_o  (u_busy[ui]),
++          .tx_ready_o (u_txrdy[ui]),
++          .lsr_ready_o(u_lsrrdy[ui])
++      );
++      assign u_irq[ui] = ~(&u_rx[ui*32+:32]) || u_busy[ui];
++    end
++  endgenerate
++  assign uart_tx          = u_tx[0];
++  assign uart_txn         = u_tx[3:1];
++  assign uart_if_ready    = |u_ready;
++  assign uart_if_rdata    = u_rdata[noc_owner*32+:32];
++  assign uart_rx_data_obs = u_rx[31:0];
++  assign uart_tx_busy_obs = u_busy[0];
++  assign uart_tx_rdy      = u_txrdy[0];
++  assign uart_lsr_rdy     = u_lsrrdy[0];
+ 
+   wire clint_ready, plic_ready;
+   wire [31:0] clint_rdata, plic_rdata;
+@@ -400,42 +432,63 @@
        .mtime_o        (mtime_for_system)
    );
  
@@ -42,23 +135,38 @@
 -      .IRQ3           (IRQ3),
 -      .IRQ7           (IRQ7)
 -  );
+-
+-  wire uart_irq = ~(&uart_rx_data_obs) || uart_tx_busy_obs;
+-  wire [31:1] plic_irqs = {21'b0, uart_irq, 9'b0};
+-
+-  plic_if #(
+-      .BASE_HI(8'h0C)
+-  ) plic_if_I (
+-      .clk              (clk),
+-      .resetn           (resetn_soc),
+-      .bus_valid_i      (cpu_mem_valid),
+-      .bus_addr_i       (cpu_mem_addr),
+-      .bus_wstrb_i      (cpu_mem_wstrb),
+-      .bus_wdata_i      (cpu_mem_wdata),
+-      .bus_rdata_o      (plic_rdata),
+-      .bus_ready_o      (plic_ready),
+-      .is_valid_o       (plic_valid_vis),
+-      .interrupt_request(plic_irqs),
+-      .irq_ctx0_o       (irq_ctx0_w),
+-      .irq_ctx1_o       (irq_ctx1_w)
+-  );
 +  wire [  3:0] c_ready, c_vis;
 +  wire [127:0] c_rdata;
-+  wire [ 23:0] c_at = cpu_mem_addr[23:0];
 +  genvar ci;
 +  generate
 +    for (ci = 0; ci < 4; ci = ci + 1) begin : g_clint
-+      wire [23:0] c_own = c_at == 24'h00_0000 + 4 * ci ? 24'h00_0000 :
-+                          c_at == 24'h00_4000 + 8 * ci ? 24'h00_4000 :
-+                          c_at == 24'h00_4004 + 8 * ci ? 24'h00_4004 :
-+                          (ci == 0 && c_at[23:3] == 21'h00_17ff) ? c_at : 24'hff_fffc;
 +      clint_if #(
 +          .BASE_HI(8'h02)
 +      ) clint_if_I (
 +          .clk            (clk),
 +          .resetn         (resetn_soc),
-+          .bus_valid_i    (cpu_mem_valid),
-+          .bus_addr_i     ({cpu_mem_addr[31:24], c_own}),
++          .bus_valid_i    (cpu_mem_valid && noc_owner == ci),
++          .bus_addr_i     (cpu_mem_addr),
 +          .bus_wstrb_i    (cpu_mem_wstrb),
 +          .bus_wdata_i    (cpu_mem_wdata),
 +          .bus_rdata_o    (c_rdata[ci*32+:32]),
@@ -75,10 +183,70 @@
 +  assign clint_rdata = c_ready[1] ? c_rdata[63:32] : c_ready[2] ? c_rdata[95:64] : c_ready[3] ? c_rdata[127:96] : c_rdata[31:0];
 +  assign IRQ3 = t_soft[0];
 +  assign IRQ7 = t_timer[0];
++
++  wire [ 1:0] p_ready, p_vis, k_ctx0, k_ctx1;
++  wire [63:0] p_rdata;
++  genvar pi;
++  generate
++    for (pi = 0; pi < 2; pi = pi + 1) begin : g_plic
++      plic_if #(
++          .BASE_HI(8'h0C)
++      ) plic_if_I (
++          .clk              (clk),
++          .resetn           (resetn_soc),
++          .bus_valid_i      (cpu_mem_valid && noc_owner == pi),
++          .bus_addr_i       (cpu_mem_addr),
++          .bus_wstrb_i      (cpu_mem_wstrb),
++          .bus_wdata_i      (cpu_mem_wdata),
++          .bus_rdata_o      (p_rdata[pi*32+:32]),
++          .bus_ready_o      (p_ready[pi]),
++          .is_valid_o       (p_vis[pi]),
++          .interrupt_request({19'b0, t_ipi[pi], t_irq[pi], u_irq[pi], 9'b0}),
++          .irq_ctx0_o       (k_ctx0[pi]),
++          .irq_ctx1_o       (k_ctx1[pi])
++      );
++    end
++  endgenerate
++  assign plic_ready     = |p_ready;
++  assign plic_valid_vis = |p_vis;
++  assign plic_rdata     = p_ready[1] ? p_rdata[63:32] : p_rdata[31:0];
++  assign irq_ctx0_w     = k_ctx0[0];
++  assign irq_ctx1_w     = k_ctx1[0];
  
-   wire uart_irq = ~(&uart_rx_data_obs) || uart_tx_busy_obs;
-   wire [31:1] plic_irqs = {21'b0, uart_irq, 9'b0};
-@@ -530,7 +555,7 @@
+   wire        sys_ready;
+   wire [31:0] sys_rdata;
+@@ -446,6 +499,7 @@
+       .CPU_FREQ_ADDR(`CPU_FREQ_REG_ADDR),
+       .MEM_SIZE_ADDR(`CPU_MEMSIZE_REG_ADDR)
+   ) sysinfo_if_I (
++      .mem_size_i      (noc_priv),
+       .clk             (clk),
+       .resetn          (resetn_soc),
+       .sysclk_mhz_q8_8 (sysclk_mhz_q8_8),
+@@ -459,16 +513,16 @@
+       .mem_size_valid_o(sys_mem_size_valid)
+   );
+ 
+-  wire match_lsr = (cpu_mem_addr == `UART_LSR_ADDR0);
+-  wire match_tx = (cpu_mem_addr == `UART_TX_ADDR0);
+-  wire match_rx = (cpu_mem_addr == `UART_RX_ADDR0);
++  wire match_lsr = ({cpu_mem_addr[31:2], 2'b01} == `UART_LSR_ADDR0) && !wr;
++  wire match_tx = (cpu_mem_addr == `UART_TX_ADDR0) && cpu_mem_wstrb[0];
++  wire match_rx = (cpu_mem_addr == `UART_RX_ADDR0) && !wr;
+ 
+   wire is_io = (cpu_mem_addr >= 32'h10_000_000 && cpu_mem_addr <= 32'h12_000_000) ||
+                (cpu_mem_addr[31:24] == 8'h0C) || (cpu_mem_addr[31:24] == 8'h02);
+ 
+-  wire spi_mem_valid0 = cpu_mem_valid && hit_spi0;
+-  wire spi_mem_valid1 = cpu_mem_valid && hit_spi1;
+-  wire gpio_valid = cpu_mem_valid && hit_gpio;
++  wire spi_mem_valid0 = cpu_mem_valid && hit_spi0 && noc_owner == 2'd0;
++  wire spi_mem_valid1 = cpu_mem_valid && hit_spi1 && noc_owner == 2'd0;
++  wire gpio_valid = cpu_mem_valid && hit_gpio && noc_owner == 2'd0;
+ 
+   wire unmatched_io = !(match_lsr || match_tx || match_rx ||
+                         clint_valid_vis || plic_valid_vis ||
+@@ -530,7 +584,7 @@
    end
  
    reg access_fault_ready;
@@ -87,7 +255,7 @@
    wire instruction_invalid_access = is_instruction && !(is_sdram || is_flash);
    wire hit_access_fault_valid         = `ENABLE_ACCESS_FAULT &&
                                          (cpu_mem_valid &&
-@@ -540,29 +565,78 @@
+@@ -540,29 +594,141 @@
      else access_fault_ready <= hit_access_fault_valid;
    end
  
@@ -117,36 +285,98 @@
 -      .PC             ()
 +      .usec           (timer_counter)
 +  );
-+  assign icache_flush = 1'b0;
 +
-+  genvar ti;
++  // 0、1 号结点：KianV。访存口与结点口同形，直接接仲裁；微秒计数由 noc_time 出，核自己的那一路不接。
++  // 原子指令在总线这一处裁决：AMO 的读与写之间锁着不换人；LR 是独占读，SC 是独占写，预留不在时仲裁不让它上总线
++  wire [ 1:0] k_lr, k_sc, k_flush;
++  wire [67:0] k_addr;
++  genvar ki;
 +  generate
-+    for (ti = 0; ti < 4; ti = ti + 1) begin : g_tile
-+      noc_tile #(
-+          .HARTID(ti)
-+      ) tile_I (
-+          .clk      (clk),
-+          .resetn   (resetn_soc && t_go[ti]),
-+          .valid    (t_valid[ti]),
-+          .wstrb    (t_wstrb[ti*4+:4]),
-+          .addr     (t_addr[ti*32+:32]),
-+          .wdata    (t_wdata[ti*32+:32]),
-+          .instr    (t_instr[ti]),
-+          .excl     (t_excl[ti]),
-+          .ready    (t_ready[ti]),
-+          .fault    (t_fault[ti]),
-+          .exokay   (t_exokay),
-+          .rdata    (cpu_mem_rdata),
-+          .irq_box  (t_irq[ti]),
-+          .irq_ipi  (t_ipi[ti]),
-+          .irq_plic (ti == 0 ? irq_ctx0_w : 1'b0),
-+          .irq_soft (t_soft[ti]),
-+          .irq_timer(t_timer[ti])
++    for (ki = 0; ki < 2; ki = ki + 1) begin : g_kv
++      kianv_harris_mc_edition #(
++          .RESET_ADDR      (`RESET_ADDR),
++          .NUM_ENTRIES_ITLB(`NUM_ENTRIES_ITLB),
++          .NUM_ENTRIES_DTLB(`NUM_ENTRIES_DTLB)
++      ) kianv_I (
++          .clk            (clk),
++          .resetn         (resetn_soc && t_go[ki]),
++          .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
++          .mem_ready      (t_ready[ki]),
++          .mem_valid      (t_valid[ki]),
++          .mem_wstrb      (t_wstrb[ki*4+:4]),
++          .mem_addr       (k_addr[ki*34+:34]),
++          .mem_wdata      (t_wdata[ki*32+:32]),
++          .mem_rdata      (cpu_mem_rdata),
++          .access_fault   (t_fault[ki]),
++          .timer_counter  (),
++          .is_instruction (t_instr[ki]),
++          .icache_flush   (k_flush[ki]),
++          .IRQ3           (t_soft[ki]),
++          .IRQ7           (t_timer[ki]),
++          .IRQ9           (k_ctx1[ki]),
++          .IRQ11          (k_ctx0[ki]),
++          .PC             (),
++          .amo_lock       (t_lock[ki]),
++          .lr_read        (k_lr[ki]),
++          .sc_write       (k_sc[ki]),
++          .sc_abort       (!t_exokay)
 +      );
++      assign t_addr[ki*32+:32] = k_addr[ki*34+:32];
++      assign t_excl[ki]        = k_lr[ki] || k_sc[ki];
 +    end
 +  endgenerate
++  assign icache_flush = |k_flush;
++  assign t_lock[3:2]  = 2'b00;
 +
-+  noc_arb arb_I (
++  // 2 号结点：Hazard3。外部中断线 0 是信箱来包，1 是核间中断，2 是自己的串口
++  noc_tile tile_I (
++      .clk      (clk),
++      .resetn   (resetn_soc && t_go[2]),
++      .valid    (t_valid[2]),
++      .wstrb    (t_wstrb[11:8]),
++      .addr     (t_addr[95:64]),
++      .wdata    (t_wdata[95:64]),
++      .instr    (t_instr[2]),
++      .excl     (t_excl[2]),
++      .ready    (t_ready[2]),
++      .fault    (t_fault[2]),
++      .exokay   (t_exokay),
++      .rdata    (cpu_mem_rdata),
++      .irq_box  (t_irq[2]),
++      .irq_ipi  (t_ipi[2]),
++      .irq_plic (u_irq[2]),
++      .irq_soft (t_soft[2]),
++      .irq_timer(t_timer[2])
++  );
++
++  // 3 号结点：PicoRV32，从 Flash 的另一处起步（它的指令集与另三颗不同，程序另编）
++  noc_pico pico_I (
++      .clk      (clk),
++      .resetn   (resetn_soc && t_go[3]),
++      .valid    (t_valid[3]),
++      .wstrb    (t_wstrb[15:12]),
++      .addr     (t_addr[127:96]),
++      .wdata    (t_wdata[127:96]),
++      .instr    (t_instr[3]),
++      .excl     (t_excl[3]),
++      .ready    (t_ready[3]),
++      .fault    (t_fault[3]),
++      .exokay   (t_exokay),
++      .rdata    (cpu_mem_rdata),
++      .irq_timer(t_timer[3]),
++      .irq_soft (t_soft[3]),
++      .irq_ipi  (t_ipi[3]),
++      .irq_box  (t_irq[3]),
++      .irq_uart (u_irq[3])
++  );
++
++  noc_arb #(
++      .PRIV0(NOC_PRIV0),
++      .PRIV1(NOC_PRIV1),
++      .PRIV2(NOC_PRIV2),
++      .PRIV3(NOC_PRIV3),
++      .SHARE(NOC_SHARE)
++  ) arb_I (
 +      .clk     (clk),
 +      .resetn  (resetn_soc),
 +      .m_valid (t_valid),
@@ -155,6 +385,7 @@
 +      .m_wdata (t_wdata),
 +      .m_instr (t_instr),
 +      .m_excl  (t_excl),
++      .m_lock  (t_lock),
 +      .m_ready (t_ready),
 +      .m_fault (t_fault),
 +      .m_exokay(t_exokay),
@@ -186,7 +417,7 @@
    );
  
    assign cpu_mem_ready =
-@@ -571,6 +645,7 @@
+@@ -571,6 +737,7 @@
        (hit_spi0 && spi0_ready) ||
        (hit_spi1 && spi1_ready) ||
        (hit_gpio && gpio_ready) ||
@@ -194,7 +425,7 @@
        (is_io    && io_ready) ||
        (hit_access_fault_valid && access_fault_ready);
  
-@@ -580,6 +655,7 @@
+@@ -580,6 +747,7 @@
        (hit_spi0 && spi0_ready)      ? spi0_rdata      :
        (hit_spi1 && spi1_ready)      ? spi1_rdata      :
        (hit_gpio && gpio_ready)      ? gpio_rdata      :
@@ -202,3 +433,200 @@
        (is_io    && io_ready)        ? io_rdata        :
        32'h0000_0000;
  
+@@ -614,8 +782,8 @@
+   wire wr = |bus_wstrb_i;
+   wire rd = ~wr;
+ 
+-  wire match_lsr = bus_valid_i && (bus_addr_i == LSR_ADDR) && rd;
+-  wire match_tx = bus_valid_i && (bus_addr_i == TX_ADDR) && wr;
++  wire match_lsr = bus_valid_i && ({bus_addr_i[31:2], LSR_ADDR[1:0]} == LSR_ADDR) && rd;
++  wire match_tx = bus_valid_i && (bus_addr_i == TX_ADDR) && bus_wstrb_i[0];
+   wire match_rx = bus_valid_i && (bus_addr_i == RX_ADDR) && rd;
+ 
+   wire uart_tx_rdy;
+@@ -983,7 +1151,8 @@
+     output wire        bus_ready_o,
+ 
+     output wire cpu_freq_valid_o,
+-    output wire mem_size_valid_o
++    output wire mem_size_valid_o,
++    input  wire [31:0] mem_size_i
+ );
+ 
+   wire wr = |bus_wstrb_i;
+@@ -1025,7 +1194,7 @@
+   assign bus_ready_o = cpu_freq_ready | mem_size_ready;
+ 
+   assign bus_rdata_o = cpu_freq_ready ? {16'b0, cpu_freq_reg} :
+-                       mem_size_ready ? `SDRAM_SIZE :
++                       mem_size_ready ? mem_size_i :
+                                         32'h0;
+ 
+   assign sysclk_mhz_q8_8 = cpu_freq_reg;
+--- a/src/chip_core.sv
++++ b/src/chip_core.sv
+@@ -3,7 +3,7 @@
+ `default_nettype none
+ 
+ module chip_core #(
+-    parameter NUM_BIDIR_PADS = 54  // unified bidirectional pads (53 used, 1 spare)
++    parameter NUM_BIDIR_PADS = 60  // upstream's 54, then RX and TX of the UARTs of nodes 1 to 3
+ )(
+     input  logic clk,       // system clock
+     input  logic rst_n,     // reset (active low)
+@@ -61,6 +61,9 @@
+     // Tie unused output bits (input-only pads) to zero
+     // ============================================================
+     assign bidir_out[UART_RX_IDX]    = 1'b0;
++    assign bidir_out[54] = 1'b0;
++    assign bidir_out[56] = 1'b0;
++    assign bidir_out[58] = 1'b0;
+     assign bidir_out[SPI0_MISO_IDX]  = 1'b0;
+     assign bidir_out[FLASH_MISO_IDX] = 1'b0;
+     assign bidir_out[SPI1_MISO_IDX]  = 1'b0;
+@@ -95,6 +98,8 @@
+         // Single UART
+         .uart_tx (bidir_out[UART_TX_IDX]),
+         .uart_rx (bidir_in [UART_RX_IDX]),
++        .uart_txn({bidir_out[59], bidir_out[57], bidir_out[55]}),
++        .uart_rxn({bidir_in[58], bidir_in[56], bidir_in[54]}),
+         // SPI0
+         .spi_cen0          (bidir_out[SPI0_CSN_IDX]),
+         .spi_sclk0         (bidir_out[SPI0_SCLK_IDX]),
+@@ -138,6 +143,9 @@
+         bidir_oe_i = '0;
+         // Static output pads
+         bidir_oe_i[UART_TX_IDX]    = 1'b1;
++        bidir_oe_i[55] = 1'b1;
++        bidir_oe_i[57] = 1'b1;
++        bidir_oe_i[59] = 1'b1;
+         bidir_oe_i[SPI0_CSN_IDX]   = 1'b1;
+         bidir_oe_i[SPI0_SCLK_IDX]  = 1'b1;
+         bidir_oe_i[SPI0_MOSI_IDX]  = 1'b1;
+--- a/src/defines_soc.vh
++++ b/src/defines_soc.vh
+@@ -135,7 +135,7 @@
+ // Memory map
+ // ============================================================================
+ `define SDRAM_MEM_ADDR_START 32'h80_000_000
+-`define SDRAM_SIZE (1024*1024*32)
++`define SDRAM_SIZE (1024*1024*64)
+ `define SDRAM_MEM_ADDR_END ((`SDRAM_MEM_ADDR_START) + (`SDRAM_SIZE))
+ 
+ `define SPI_NOR_MEM_ADDR_START 32'h20_000_000
+--- a/src/sdram/mt48lc16m16a2_ctrl.v
++++ b/src/sdram/mt48lc16m16a2_ctrl.v
+@@ -44,7 +44,7 @@
+     input wire clk,
+     input wire resetn,
+ 
+-    input  wire [24:0] addr,
++    input  wire [25:0] addr,
+     input  wire [31:0] din,
+     input  wire [ 3:0] wmask,
+     input  wire        valid,
+@@ -138,7 +138,7 @@
+ 
+     $display("--- Address mapping -------------------------------");
+     $display("bank = addr[22:21]");
+-    $display("row  = {addr[24:23], addr[20:10]}");
++    $display("row  = {addr[25:23], addr[20:11]}");
+     $display("col  = {addr[10:2], A0=0} (BL=2)");
+     $display("====================================================");
+   end
+@@ -215,7 +215,7 @@
+   reg [3:0] ref_credit, ref_credit_nxt;
+ 
+   wire [ 1:0] cur_bank_w = addr[22:21];
+-  wire [12:0] cur_row_w = {addr[24:23], addr[20:10]};
++  wire [12:0] cur_row_w = {addr[25:23], addr[20:11]};
+ 
+   reg [3:0] bank_open_valid, bank_open_valid_nxt;
+   reg [12:0] open_row0, open_row1, open_row2, open_row3;
+--- a/src/kianv_harris_edition/control_unit.v
++++ b/src/kianv_harris_edition/control_unit.v
+@@ -95,7 +95,12 @@
+     input  wire mul_ready,
+ 
+     output wire div_valid,
+-    input  wire div_ready
++    input  wire div_ready,
++
++    output wire amo_lock,
++    output wire lr_read,
++    output wire sc_write,
++    input  wire sc_abort
+ );
+ 
+   wire [`ALU_OP_WIDTH   -1:0] ALUOp;
+@@ -189,6 +194,10 @@
+ 
+       .mem_valid(fsm_mem_valid),
+       .mem_ready(mem_ready),
++      .amo_lock (amo_lock),
++      .lr_read  (lr_read),
++      .sc_write (sc_write),
++      .sc_abort (sc_abort),
+ 
+       .mul_ext_valid(mul_ext_valid),
+       .mul_ext_ready(mul_ext_ready)
+--- a/src/kianv_harris_edition/kianv_harris_mc_edition.v
++++ b/src/kianv_harris_edition/kianv_harris_mc_edition.v
+@@ -43,7 +43,11 @@
+     input  wire        IRQ11,
+     output wire [63:0] timer_counter,
+     output wire        is_instruction,
+-    output wire        icache_flush
++    output wire        icache_flush,
++    output wire amo_lock,
++    output wire lr_read,
++    output wire sc_write,
++    input  wire sc_abort
+ );
+ 
+   wire [                 31:0] Instr;
+@@ -183,6 +187,10 @@
+       .selectPC         (selectPC),
+       .tlb_flush        (tlb_flush),
+       .icache_flush     (icache_flush),
++      .amo_lock (amo_lock),
++      .lr_read  (lr_read),
++      .sc_write (sc_write),
++      .sc_abort (sc_abort),
+ 
+       .mul_valid(mul_valid),
+       .mul_ready(mul_ready),
+--- a/src/kianv_harris_edition/main_fsm.v
++++ b/src/kianv_harris_edition/main_fsm.v
+@@ -89,7 +89,11 @@
+     input wire mul_ext_ready,
+     output reg is_instruction,
+     input wire stall,
+-    input wire mem_ready
++    input wire mem_ready,
++    output wire amo_lock,
++    output wire lr_read,
++    output wire sc_write,
++    input  wire sc_abort
+ );
+ 
+   localparam load    = 7'b000_0011,
+@@ -446,7 +450,7 @@
+           is_store_unaligned: state_nxt = STORE_MISALIGN_0;
+           access_fault:       state_nxt = STORE_FAULT_0;
+           page_fault:         state_nxt = SPAGE_FAULT_0;
+-          mem_ready:          state_nxt = AMO_SC_SUCCESS;
++          mem_ready:          state_nxt = sc_abort ? AMO_SC_FAIL : AMO_SC_SUCCESS;
+           default:            state_nxt = AMO_SC_WRITE;
+         endcase
+       end
+@@ -1006,4 +1010,9 @@
+     incr_inst_retired = retire_pulse_int_final;
+   end
+ 
++  assign amo_lock = state == AMO_OP_READ || state == AMO_OP_WB || state == AMO_OP_EXEC ||
++                    state == AMO_OP_ADDR || state == AMO_OP_WRITE;
++  assign lr_read  = state == AMO_LR_READ;
++  assign sc_write = state == AMO_SC_WRITE;
++
+ endmodule

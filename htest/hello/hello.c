@@ -32,21 +32,23 @@ void main(void) {
   hex(REG(CTL + 4));
   say(" run ");
   hex(REG(CTL + 8));
+  say(" mem ");
+  hex(REG(0x10000018));
 
-  /* 步长取素数，1024 个字散在私有的那 6 MiB 里，行、列、bank 都换到 */
+  /* 步长取素数，1024 个字散在私有的那一段里，行、列、bank 都换到 */
   volatile uint32_t *m = (volatile uint32_t *)0x80000000;
   uint32_t bad = 0;
   for (uint32_t i = 0; i < 1024; i++) m[i * 1531] = want(i);
   for (uint32_t i = 0; i < 1024; i++) bad += m[i * 1531] != want(i);
 
   /* 字节与半字写只动自己那几位；私有段的最后两个字 */
-  volatile uint8_t *b = (volatile uint8_t *)0x805ffff8;
-  REG(0x805ffff8) = 0x11223344;
-  REG(0x805ffffc) = 0x55667788;
+  volatile uint8_t *b = (volatile uint8_t *)0x817ffff8;
+  REG(0x817ffff8) = 0x11223344;
+  REG(0x817ffffc) = 0x55667788;
   b[1] = 0xaa;
   *(volatile uint16_t *)(b + 6) = 0xbbcc;
-  bad += REG(0x805ffff8) != 0x1122aa44;
-  bad += REG(0x805ffffc) != 0xbbcc7788;
+  bad += REG(0x817ffff8) != 0x1122aa44;
+  bad += REG(0x817ffffc) != 0xbbcc7788;
 
   /* 共享段的头尾 */
   REG(0x90000000) = 0x600dcafe;
@@ -60,6 +62,6 @@ void main(void) {
 
   /* 段里的读得到，一出段就判出错 */
   say("\nedge ");
-  hex(probe(0x805ffffc) << 12 | probe(0x80600000) << 8 | probe(0x907ffffc) << 4 | probe(0x90800000));
+  hex(probe(0x817ffffc) << 12 | probe(0x81800000) << 8 | probe(0x907ffffc) << 4 | probe(0x90800000));
   say("\ndone\n");
 }

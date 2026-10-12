@@ -3,6 +3,7 @@ reject assert
 expect to2610 boot
 expect sum ok, jump
 expect FreeRTOS on to2610-noc
+expect heap 23 MiB
 expect up 4
 send id\n
 expect noc 2x2, 4 cores

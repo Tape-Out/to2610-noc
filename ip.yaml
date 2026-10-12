@@ -5,12 +5,12 @@ kind: ip
 lang: verilog
 identity:
   slug: to2610-noc
-  display_name: Four cores on a two-by-two mesh
-  summary: 'A four-core chip for the ECOS 2610 shuttle: four Hazard3 cores, one on each node of a two-by-two mesh network, exchanging messages through per-core mailboxes and sharing the off-chip flash, SDRAM and serial port of the to2610-kvc board.'
+  display_name: Four nodes of three kinds of core on a two-by-two mesh
+  summary: 'A four-node chip for the ECOS 2610 shuttle: two KianV cores, a Hazard3 and a PicoRV32 with the A extension added by a coprocessor, one on each node of a two-by-two mesh network, each running its own program, exchanging messages through per-node mailboxes and sharing the off-chip flash and SDRAM of the to2610-kvc board.'
   category: soc
   subcategories:
   - riscv
-  ip_family: hazard3
+  ip_family: kianriscv
   integration_profile: []
   maturity: simulated
 contract:
@@ -23,12 +23,13 @@ deps:
   gf180mcu-kianv-rv32ima-sv32: ^0.1
   to2610-kvc: ^0.1
   hazard3: ^0.1
+  picorv32: ^0.1
   noc: ^0.1
 emit:
 - kind: foreign
   lang: sv
   top: chip_core
-  # 源码树是拼出来的：黑盒仓拼好的那一份（to2610-kvc 的那一颗）套上本仓的补丁，加 Hazard3、网格与信箱。
+  # 源码树是拼出来的：黑盒仓拼好的那一份（to2610-kvc 的那一颗）套上本仓的补丁，加 Hazard3、PicoRV32、网格与信箱。
   # 信箱是 box/NocBox.bsv，由 htest/setup.sh 用 bsc 连同 noc 库编成 Verilog 再放进来；hwsrc 里只有 Verilog
   setup: src
   rtl:
@@ -38,6 +39,7 @@ emit:
   - { glob: "build/src/kianv_harris_edition/*.v" }
   - { glob: "build/src/hazard3/*.v" }
   - { glob: "build/src/hazard3/arith/*.v" }
+  - build/src/picorv32/picorv32.v
   includes:
   - build/src
   - build/src/kianv_harris_edition
@@ -62,7 +64,7 @@ emit:
     active: low
     sync: false
   ports:
-  # 引脚与 to2610-kvc 逐位相同：上游并成的那条 54 位双向焊盘总线
+  # 前 54 位与 to2610-kvc 逐位相同（上游并成的那条双向焊盘总线），后 6 位是 1 至 3 号结点的串口
   - endpoint: pads
     kind: physical
     type: KianvPads
@@ -76,10 +78,11 @@ emit:
       pu: bidir_pu
       pd: bidir_pd
   limits:
-  - 网格只走核间报文；片外的 Flash、SDRAM 与外设经一个四路仲裁共用，换人要空三拍
-  - 每个核私有 6 MiB，四核共享 8 MiB；越出这两段的访问判出错
-  - 只有 0 号核接着串口的中断；其余核要说的话经网格发给它
-  - SDRAM 固定 32 MiB、主频固定 50 MHz、没有 JTAG，同 to2610-kvc
+  - 网格只走结点间的报文；片外的 Flash、SDRAM 与外设经一个四路仲裁共用，换人要空三拍
+  - 私有段两颗 KianV 各 24 MiB、另两个结点各 4 MiB，四个结点共享 8 MiB；越出这几段的访问判出错
+  - SD 卡口、SPI 网卡口、GPIO 只归 0 号结点；四个结点同一个时钟、同一个波特率分频
+  - PicoRV32 没有访问出错的口：仲裁判出错时那次访问照常收尾，另起它的 2 号中断
+  - SDRAM 固定 64 MiB、主频固定 50 MHz、没有 JTAG，同 to2610-kvc
 asic:
   top: to2610_noc
   frame: mpc
@@ -87,26 +90,38 @@ asic:
   flow: syn_sta
   # 四个核的布线后等价比对在托管机上到六小时的时限也没有结束；布线前的那一道照跑
   skip: [postRouteLec]
-  # 引脚与 to2610-kvc 逐位相同，原样占 payload 的 0 到 53 位：用同一块底板
+  # payload 的 0 到 53 位与 to2610-kvc 逐位相同，用同一块底板；54 到 59 位是 1 至 3 号结点的串口
   pads:
   - { in: bidir_in, out: bidir_out, oe: bidir_oe }
   unused: [bidir_cs, bidir_sl, bidir_ie, bidir_pu, bidir_pd]
 tasks:
   src:
-    desc: 拼源码树：黑盒仓拼好的那一份套上 patch/noc.patch，加 Hazard3、bsc 编出来的信箱与网格、本仓 hwsrc 里的模块
-    run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.hazard3}} {{dep.noc}}
+    desc: 拼源码树：黑盒仓拼好的那一份套上 patch/noc.patch，加 Hazard3、PicoRV32、bsc 编出来的信箱与网格、本仓 hwsrc 里的模块
+    run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.hazard3}} {{dep.noc}} {{dep.picorv32}}
   chip:
     desc: 出流片的 .v，在它上面跑整片测试
     run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
     timeout: 14400
   design-faults:
-    desc: 把仲裁、信箱、CLINT 的排法里的一处改错、重出 .v：四核的那两段测试里管这一处的那一句要红，十处
+    desc: 把仲裁、信箱、各结点的 CLINT 与串口、中断的接线、KianV 与 PicoRV32 的原子访问、签名指令里的一处改错、重出 .v：四个结点一起跑的那五段测试里管这一处的那一句要红，二十二处
     run: bash htest/design-faults.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
-    timeout: 7200
+    timeout: 10800
+  linux-prep:
+    desc: 给两份 Linux 的接力备料：编仿真器，取 to2610-kvc 钉住的镜像、把设备树里的内存改成 24 MiB，连同两个回声拼成 Flash 镜像，放进 build/linux-run
+    run: bash htest/linux-prep.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
+    timeout: 3600
+  linux-boot:
+    desc: 接力的一棒：两颗 KianV 各起一份 Linux，各在自己的串口上起到 shell；用 linux-prep 备在 build/linux-run 的仿真器与镜像，跑满时限把断点交给下一棒
+    run: bash htest/linux-boot.sh {{out}} {{dep.to2610-kvc}}
+    timeout: 19800
+  linux-box:
+    desc: 从两份 Linux 都到 shell 的断点接着跑：两份 Linux 互发、各问一个回声（Hazard3、PicoRV32），共享段上互相读到对方写的字
+    run: bash htest/linux-box.sh {{out}} {{dep.to2610-kvc}}
+    timeout: 19800
 test:
   upstream:
   - { name: chip, task: chip, timeout: 14400 }
-  - { name: design-faults, task: design-faults, timeout: 7200 }
+  - { name: design-faults, task: design-faults, timeout: 10800 }
 targets:
   foreign:
     driver: foreign

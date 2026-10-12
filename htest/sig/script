@@ -1,0 +1,5 @@
+reject BAD
+expect noc sig
+expect heke1228
+expect sig ok 00000000
+expect done
