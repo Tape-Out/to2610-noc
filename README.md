@@ -1,6 +1,6 @@
 # to2610-noc
 
-Four independent computers on one chip, joined by a two-by-two mesh network, for the ECOS 2610 shuttle: two KianV cores (RV32IMA with Sv32), a Hazard3 (RV32IMAC, machine mode) and a PicoRV32 (RV32IMC, with the A extension added by a coprocessor). This is not an SMP system. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port, and each KianV has its own PLIC. The nodes meet in two places only: the mailboxes on the mesh, and a shared stretch of memory where LR, SC and the AMOs hold across all four.
+Four independent computers on one chip, joined by a two-by-two mesh network, for the ECOS 2610 shuttle: two KianV cores (RV32IMA with Sv32), a Hazard3 (RV32IMAC, machine mode) and a PicoRV32IMAC: upstream's PicoRV32 is RV32IMC and has no A extension, and the one here is our own, written in this repository as a coprocessor on its PCPI port. This is not an SMP system. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port, and each KianV has its own PLIC. The nodes meet in two places only: the mailboxes on the mesh, and a shared stretch of memory where LR, SC and the AMOs hold across all four.
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
@@ -10,7 +10,7 @@ The cores are upstream's, their submodules untouched, taken from [`gf180mcu-kian
 |:--:|:--:|
 | `box/NocBox.bsv` | four mailboxes and a control page in front of the mesh |
 | `hwsrc/noc_tile.v` | the Hazard3 node: the core and the bridge from its AHB5 port to the on-chip bus |
-| `hwsrc/noc_pico.v` | the PicoRV32 node: the core and its coprocessor, which adds `lr.w`, `sc.w`, the AMOs, `fence.i` and a signature instruction |
+| `hwsrc/noc_pico.v` | the PicoRV32IMAC node: the core and our coprocessor, which implements the A extension (`lr.w`, `sc.w` and the nine AMOs), `fence.i` and a signature instruction |
 | `hwsrc/noc_arb.v` | the four-way arbiter, the private and shared memory windows, and the reservation table for LR, SC and the AMOs |
 | `hwsrc/noc_time.v` | the microsecond counter behind `mtime` |
 | `patch/noc.patch` | the source tree of `to2610-kvc` with the four nodes put in: a CLINT, a UART and a memory size for each, a PLIC for each KianV, a 64 MiB SDRAM; `patch/mkpatch.py` regenerates it |
