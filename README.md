@@ -33,7 +33,7 @@ All four see the same address map. What differs is what stands behind an address
 | `0x8000_0000` | its private SDRAM: 24 MiB for a KianV, 4 MiB for the others |
 | `0x9000_0000` | 8 MiB of SDRAM shared by all four |
 
-Only node 0 runs after reset; writing a bit of `RUN` releases the matching node. The KianV and Hazard3 nodes start in the boot loader at `0x2010_0000`. It finds the node's payload in the directory, copies it into the node's own SDRAM, reports on the node's own serial port and jumps to it; on node 0 it first releases the nodes the directory names, so they load side by side. The PicoRV32 starts at `0x2018_0000` and runs its program in place.
+Only node 0 runs after reset; writing a bit of `RUN` releases the matching node. The KianV and Hazard3 nodes start in the boot loader at `0x2010_0000`. It finds the node's payload in the directory, copies it into the node's own SDRAM, reports on the node's own serial port and jumps to it; on node 0 it first releases the nodes the directory names, so they load side by side. The PicoRV32IMAC starts at `0x2018_0000` and runs its program in place.
 
 ```console
 $ python3 sw/pack.py boot.bin image.flash --pico pico.bin --run 0xf 01=linux.bin 2=rtos.bin
@@ -41,13 +41,13 @@ $ python3 sw/pack.py boot.bin image.flash --pico pico.bin --run 0xf 01=linux.bin
 
 A node sends a word by writing the destination to `TXDEST` and the word to `TXDATA`; the receiver reads `RXSRC` and `RXDATA`. Sending never blocks: when the mesh is full the packet is dropped and a bit of `STAT` says so.
 
-Each node takes its timer and software interrupts from its own CLINT. A packet in the mailbox, an interrupt sent by another node and the node's UART reach a KianV through its PLIC (sources 11, 12 and 10), the Hazard3 on its external interrupt lines, and the PicoRV32 on its interrupts 6, 5 and 7.
+Each node takes its timer and software interrupts from its own CLINT. A packet in the mailbox, an interrupt sent by another node and the node's UART reach a KianV through its PLIC (sources 11, 12 and 10), the Hazard3 on its external interrupt lines, and the PicoRV32IMAC on its interrupts 6, 5 and 7.
 
 Storage is shared, so a node that owns the bus makes the others wait. A program meant to run fast is copied into the node's SDRAM at boot, and an idle node waits for an interrupt instead of spinning in flash.
 
 ## The signature instruction
 
-The PicoRV32 node has one instruction of its own, on custom-1: with `rs1` 0 or 1 it returns the two words that spell `heke1228` in memory.
+The PicoRV32IMAC node has one instruction of its own, on custom-1: with `rs1` 0 or 1 it returns the two words that spell `heke1228` in memory.
 
 ```c
 static inline unsigned sig(unsigned i) {
@@ -81,7 +81,7 @@ The chip tests run on Verilator with pin-level models of the SDRAM, the flash an
 | `atomic` | the four kinds of core contend for one counter with AMOs, a spin lock and LR/SC |
 | `uart` | each node speaks on its own serial port and on no other |
 | `sig` | the signature instruction |
-| `rtos` | FreeRTOS on three nodes and a bare-metal worker on the PicoRV32 share out a sum |
+| `rtos` | FreeRTOS on three nodes and a bare-metal worker on the PicoRV32IMAC share out a sum |
 | `echo` | one flash image, a different program for each node |
 
 Twenty-two planted design faults each turn one of them red.
