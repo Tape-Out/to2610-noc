@@ -1,6 +1,6 @@
 # to2610-noc
 
-Four independent computers on one chip, joined by a two-by-two mesh, for the ECOS 2610 shuttle: two KianV (RV32IMA, Sv32), a Hazard3 (RV32IMAC, machine mode) and a PicoRV32IMAC. Upstream's PicoRV32 has no A extension; ours is a coprocessor on its PCPI port, in `hwsrc/noc_pico.v`. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port. The nodes meet only in the mailboxes and in a shared stretch of memory where LR, SC and the AMOs hold across all four.
+Four independent computers on one chip, joined by a two-by-two mesh, for the ECOS 2610 shuttle: two KianV with RV32IMA and Sv32, a Hazard3 with RV32IMAC in machine mode, and a PicoRV32IMAC. Upstream's PicoRV32 has no A extension; ours is a coprocessor on its PCPI port, in `hwsrc/noc_pico.v`. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port. The nodes meet only in the mailboxes and in a shared stretch of memory where LR, SC and the AMOs hold across all four.
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
@@ -10,7 +10,7 @@ The cores are upstream's, their submodules untouched, taken from [`gf180mcu-kian
 |:--:|:--:|
 | `box/NocBox.bsv` | four mailboxes and a control page in front of the mesh |
 | `hwsrc/noc_tile.v` | the Hazard3 node: the core and the bridge from its AHB5 port to the on-chip bus |
-| `hwsrc/noc_pico.v` | the PicoRV32IMAC node: the core and our coprocessor, which implements the A extension (`lr.w`, `sc.w` and the nine AMOs), `fence.i` and a signature instruction |
+| `hwsrc/noc_pico.v` | the PicoRV32IMAC node: the core and our coprocessor, which implements `lr.w`, `sc.w` and the nine AMOs of the A extension, `fence.i` and a signature instruction |
 | `hwsrc/noc_arb.v` | the four-way arbiter, the private and shared memory windows, and the reservation table for LR, SC and the AMOs |
 | `hwsrc/noc_time.v` | the microsecond counter behind `mtime` |
 | `patch/noc.patch` | the source tree of `to2610-kvc` with the four nodes put in: a CLINT, a UART and a memory size for each, a PLIC for each KianV, a 64 MiB SDRAM; `patch/mkpatch.py` regenerates it |
@@ -25,7 +25,7 @@ All four see the same address map. What differs is what stands behind an address
 | Address | Each node sees |
 |:--:|:--:|
 | `0x0200_0000` | its own CLINT |
-| `0x0C00_0000` | its own PLIC (KianV nodes) |
+| `0x0C00_0000` | its own PLIC, on the KianV nodes |
 | `0x1000_0000` | its own UART; `0x1000_0018` reads the size of its private memory |
 | `0x2000_0000` | the flash, shared and read-only |
 | `0x4004_0000` | the control page: `HART` at `0x04` is the node number, `RUN` at `0x08` releases nodes |
@@ -41,7 +41,7 @@ $ python3 sw/pack.py boot.bin image.flash --pico pico.bin --run 0xf 01=linux.bin
 
 A node sends a word by writing the destination to `TXDEST` and the word to `TXDATA`; the receiver reads `RXSRC` and `RXDATA`. Sending never blocks: when the mesh is full the packet is dropped and a bit of `STAT` says so.
 
-Each node takes its timer and software interrupts from its own CLINT. A packet in the mailbox, an interrupt sent by another node and the node's UART reach a KianV through its PLIC (sources 11, 12 and 10), the Hazard3 on its external interrupt lines, and the PicoRV32IMAC on its interrupts 6, 5 and 7.
+Each node takes its timer and software interrupts from its own CLINT. A packet in the mailbox, an interrupt sent by another node and the node's UART reach a KianV through its PLIC as sources 11, 12 and 10, the Hazard3 on its external interrupt lines, and the PicoRV32IMAC on its interrupts 6, 5 and 7.
 
 Storage is shared, so a node that owns the bus makes the others wait. A program meant to run fast is copied into the node's SDRAM at boot, and an idle node waits for an interrupt instead of spinning in flash.
 
@@ -60,7 +60,7 @@ unsigned w[3] = {sig(0), sig(1), 0};   /* (char *)w is "heke1228" */
 
 ## Board
 
-Pads 0 to 53 are those of `to2610-kvc`, and its board fits with the SDRAM replaced by a 64 MiB part in the same package (MT48LC32M16A2 or alike). Pads 54 to 59 are RX and TX of the serial ports of nodes 1 to 3, so every node has a console of its own.
+Pads 0 to 53 are those of `to2610-kvc`, and its board fits with the SDRAM replaced by a 64 MiB part in the same package, such as MT48LC32M16A2. Pads 54 to 59 are RX and TX of the serial ports of nodes 1 to 3, so every node has a console of its own.
 
 ## Testing and tape-out
 
