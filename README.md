@@ -1,6 +1,6 @@
 # to2610-noc
 
-Four independent computers on one chip, joined by a two-by-two mesh network, for the ECOS 2610 shuttle: two KianV cores (RV32IMA with Sv32), a Hazard3 (RV32IMAC, machine mode) and a PicoRV32IMAC: upstream's PicoRV32 is RV32IMC and has no A extension, and the one here is our own, written in this repository as a coprocessor on its PCPI port. This is not an SMP system. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port, and each KianV has its own PLIC. The nodes meet in two places only: the mailboxes on the mesh, and a shared stretch of memory where LR, SC and the AMOs hold across all four.
+Four independent computers on one chip, joined by a two-by-two mesh, for the ECOS 2610 shuttle: two KianV (RV32IMA, Sv32), a Hazard3 (RV32IMAC, machine mode) and a PicoRV32IMAC. Upstream's PicoRV32 has no A extension; ours is a coprocessor on its PCPI port, in `hwsrc/noc_pico.v`. Every node is hart 0 of its own machine, with its own memory, CLINT and serial port. The nodes meet only in the mailboxes and in a shared stretch of memory where LR, SC and the AMOs hold across all four.
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
@@ -83,6 +83,8 @@ The chip tests run on Verilator with pin-level models of the SDRAM, the flash an
 | `sig` | the signature instruction |
 | `rtos` | FreeRTOS on three nodes and a bare-metal worker on the PicoRV32IMAC share out a sum |
 | `echo` | one flash image, a different program for each node |
+| `linux-prep`, `linux` | a Linux image for each KianV, its memory cut to 24 MiB, both booted from flash side by side to a shell, relayed over CI jobs |
+| `linux-box` | from that checkpoint: the two Linux nodes exchange packets, each asks an echo node, and each reads the other's word in shared memory; too long for a hosted runner, it finishes locally from the CI checkpoint |
 
 Twenty-two planted design faults each turn one of them red.
 
