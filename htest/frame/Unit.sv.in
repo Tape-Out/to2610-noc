@@ -1,0 +1,134 @@
+// 单元测试：只测这一颗设计，不经过 FrameTop。
+// 片外只放一颗 SPI Flash 的模型，里面是 smoke.S 汇编出来的一小段程序；
+// 复位放开后 0 号结点从 Flash 的 1 MiB 处取指，程序读控制页的标识、设好串口分频、发一个字，这里从串口脚上把它收下来核对。
+// 取指、片上总线、Flash 口与串口都走到；SDRAM 不接，程序不用内存。
+
+module @UNIT_TOP@;
+
+  localparam int IO_WIDTH = 66;
+  localparam time HALF_PERIOD = 5ns;
+
+  // payload 位次，照流片说明的板级连接表
+  localparam int UART_RX = 0;
+  localparam int SPI0_MISO = 1;
+  localparam int FLASH_MISO = 2;
+  localparam int SPI1_MISO = 3;
+  localparam int UART_TX = 4;
+  localparam int FLASH_CSN = 8;
+  localparam int FLASH_SCLK = 9;
+  localparam int FLASH_MOSI = 10;
+  // 1、2、3 号结点的串口，RX、TX 依次占 54 至 59
+  localparam int NODE_UART = 54;
+
+  // 程序把分频值写成 16；发送器每位占分频值加一拍
+  localparam int BIT_CYCLES = 17;
+  localparam logic [7:0] EXPECT = 8'h@EXPECT@;
+  // 片上复位后先数 333,333 拍，再给 SDRAM 上电初始化一万拍，然后才取第一条指令
+  localparam int TIMEOUT_CYCLES = 600_000;
+
+  localparam int ROM_BYTES = @ROM_BYTES@;
+  localparam logic [23:0] ROM_BASE = 24'h100000;
+  logic [7:0] rom [ROM_BYTES] = '{@ROM@};
+
+  logic clock = 1'b0;
+  logic reset = 1'b1;
+  logic [IO_WIDTH-1:0] io_in;
+  wire [IO_WIDTH-1:0] io_out;
+  wire [IO_WIDTH-1:0] io_oe;
+
+  always #(HALF_PERIOD) clock = ~clock;
+
+  UserDesignDut #(.IO_WIDTH(IO_WIDTH)) dut (
+    .clock(clock), .reset(reset), .io_in(io_in),
+    .io_out(io_out), .io_oe(io_oe)
+  );
+
+  // SPI Flash：只认 0x03 读。片选拉低后先收 32 位（命令加 24 位地址），之后每个 SCLK 下降沿送出一位
+  wire flash_csn = io_out[FLASH_CSN];
+  wire flash_sclk = io_out[FLASH_SCLK];
+  wire flash_mosi = io_out[FLASH_MOSI];
+  logic flash_miso = 1'b1;
+  logic [5:0] flash_count = '0;
+  logic [22:0] flash_shift = '0;
+  logic [23:0] flash_addr = '0;
+  logic [2:0] flash_bit = 3'd7;
+
+  function automatic logic [7:0] flash_byte(input logic [23:0] addr);
+    logic [23:0] offset;
+    offset = addr - ROM_BASE;
+    if (addr >= ROM_BASE && offset < 24'(ROM_BYTES)) return rom[offset[$clog2(ROM_BYTES)-1:0]];
+    return 8'hff;
+  endfunction
+
+  // 在主时钟的下降沿看 SCLK：它是主时钟的二分频，这时已经稳定。比上一拍高了是上升沿，收一位；低了是下降沿，送一位
+  logic flash_sclk_q = 1'b0;
+  always @(negedge clock) begin
+    flash_sclk_q <= (flash_sclk === 1'b1);
+    if (flash_csn !== 1'b0) begin
+      flash_count <= '0;
+    end else if (flash_sclk === 1'b1 && !flash_sclk_q) begin
+      if (flash_count < 6'd32) begin
+        flash_shift <= {flash_shift[21:0], flash_mosi};
+        flash_count <= flash_count + 6'd1;
+        if (flash_count == 6'd31) begin
+          flash_addr <= {flash_shift, flash_mosi};
+          flash_bit <= 3'd7;
+        end
+      end else begin
+        flash_bit <= flash_bit - 3'd1;
+        if (flash_bit == 3'd0) flash_addr <= flash_addr + 24'd1;
+      end
+    end else if (flash_sclk === 1'b0 && flash_sclk_q) begin
+      if (flash_count == 6'd32) flash_miso <= flash_byte(flash_addr)[flash_bit];
+    end
+  end
+
+  // 没接的输入：四路串口与两路 SPI 的 MISO 空闲为高，SDRAM 的数据线读成 0
+  always_comb begin
+    io_in = '0;
+    io_in[UART_RX] = 1'b1;
+    io_in[NODE_UART+:6] = 6'b010101;
+    io_in[SPI0_MISO] = 1'b1;
+    io_in[SPI1_MISO] = 1'b1;
+    io_in[FLASH_MISO] = flash_miso;
+  end
+
+  // 从串口脚上收一个字：起始位的下降沿之后一位半处采第 0 位
+  task automatic uart_receive(output logic [7:0] data);
+    @(negedge io_out[UART_TX]);
+    repeat (BIT_CYCLES + BIT_CYCLES / 2) @(posedge clock);
+    for (int i = 0; i < 8; i++) begin
+      data[i] = io_out[UART_TX];
+      repeat (BIT_CYCLES) @(posedge clock);
+    end
+  endtask
+
+  initial begin
+    logic [7:0] got;
+
+    repeat (20) @(posedge clock);
+    @(negedge clock);
+    reset = 1'b0;
+    repeat (4) @(posedge clock);
+    #1ns;
+
+    // 方向：0 至 3 是输入，4 至 36 是输出（串口发、三路 SPI、SDRAM 的控制与地址），54 至 59 是另外三个结点的串口（偶数位收、奇数位发），60 以上没用到
+    if (io_oe[3:0] !== 4'b0000 || io_oe[36:4] !== '1 || io_oe[NODE_UART+:6] !== 6'b101010
+        || io_oe[IO_WIDTH-1:NODE_UART+6] !== '0)
+      $fatal(1, "pad directions after reset are wrong: io_oe = %h", io_oe);
+
+    fork
+      begin
+        uart_receive(got);
+        if (got !== EXPECT) $fatal(1, "UART sent %h, expected %h", got, EXPECT);
+        $display("@UNIT_TOP@ PASS: booted from flash and sent %h over the UART", EXPECT);
+        $finish;
+      end
+      begin
+        repeat (TIMEOUT_CYCLES) @(posedge clock);
+        $fatal(1, "nothing on the UART after %0d cycles", TIMEOUT_CYCLES);
+      end
+    join_any
+  end
+
+endmodule
